@@ -105,6 +105,8 @@ def main() -> None:
             "profit",
             "roi",
             "volume_1h",
+            "low_vol_1h",
+            "high_vol_1h",
             "limit",
             "flip_qty",
             "potential_profit",
@@ -120,7 +122,9 @@ def main() -> None:
             "profit": "Profit / ea",
             "roi": "ROI",
             "volume_1h": "Vol 1h",
-            "limit": "GE limit",
+            "low_vol_1h": "Vol buy 1h",
+            "high_vol_1h": "Vol sell 1h",
+            "limit": "GE limit (4h)",
             "flip_qty": "Est. 1h qty",
             "potential_profit": "Est. 1h profit",
             "stale_min": "Stale (min)",
@@ -129,6 +133,8 @@ def main() -> None:
     )
     display["ROI"] = display["ROI"].map(lambda x: f"{x:.1%}" if pd.notna(x) else "—")
     display["Stale (min)"] = display["Stale (min)"].map(lambda x: f"{x:.0f}")
+    for vol_col in ["Vol 1h", "Vol buy 1h", "Vol sell 1h", "GE limit (4h)", "Est. 1h qty"]:
+        display[vol_col] = display[vol_col].map(lambda x: f"{int(x):,}" if pd.notna(x) else "—")
     money_cols = [
         "Buy (low)",
         "Sell (high)",
@@ -143,11 +149,24 @@ def main() -> None:
     selected = st.selectbox("Inspect item", names, index=0)
     row = table[table["name"] == selected].iloc[0]
 
-    st.dataframe(display, use_container_width=True, hide_index=True, height=420)
-
     left, right = st.columns([2, 1])
     with left:
-        timestep = st.radio("History step", ["5m", "1h", "6h", "24h"], index=3, horizontal=True)
+        timestep = st.radio(
+            "Each chart point averages",
+            ["5m", "1h", "6h", "24h"],
+            index=3,
+            horizontal=True,
+            help=(
+                "This is the size of each dot, not the length of the x-axis. "
+                "24h = one daily average (the axis is still many months). "
+                "5m = one point every five minutes (much shorter recent window)."
+            ),
+        )
+        st.caption(
+            "X-axis is always time. **24h** means each point is a full day "
+            "(about a year of days). **5m** means each point is five minutes "
+            "(a short recent window)."
+        )
         history = load_history(int(row["item_id"]), timestep)
         if history.empty:
             st.info("No history for this item.")
@@ -171,6 +190,7 @@ def main() -> None:
             )
             fig.update_layout(
                 title=f"{row['name']} price history",
+                xaxis_title="Date",
                 yaxis_title="gp",
                 margin=dict(l=10, r=10, t=40, b=10),
                 legend=dict(orientation="h"),
@@ -182,17 +202,22 @@ def main() -> None:
 
     with right:
         st.subheader(row["name"])
-        st.write(row.get("examine") or "")
         st.metric("Buy at (low)", gp(row["buy_price"]))
         st.metric("Sell at (high)", gp(row["sell_price"]))
         st.metric("Profit after tax", gp(row["profit"]))
-        st.metric("1h volume", f"{int(row['volume_1h']):,}")
+        st.metric("1h volume (total)", f"{int(row['volume_1h']):,}")
+        st.metric("Buy-side vol 1h", f"{int(row['low_vol_1h']):,}")
+        st.metric("Sell-side vol 1h", f"{int(row['high_vol_1h']):,}")
+        st.caption("Buy-side = trades at the low (you getting stock). Sell-side = trades at the high (you dumping). Est. 1h qty uses the smaller of those two, then cash and the 4h buy limit.")
         wiki = row["name"].replace(" ", "_")
         st.link_button("Open on OSRS Wiki", f"https://oldschool.runescape.wiki/w/{wiki}")
         st.caption(
             "This is not financial advice for a pixel market either. "
             "Wide margins on thin volume often do not fill."
         )
+
+    st.subheader("Flip candidates")
+    st.dataframe(display, use_container_width=True, hide_index=True, height=420)
 
 
 if __name__ == "__main__":

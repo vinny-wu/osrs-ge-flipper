@@ -20,6 +20,7 @@ streamlit run app.py
 - **Buy price** = latest `low` (place a buy offer and wait)
 - **Sell price** = latest `high` (place a sell offer and wait)
 - **Tax** = 2% of the sell price, capped at 5,000,000 gp
-- **Potential profit** = profit per item × how many you can buy with your cash stack, capped by the GE buy limit
+- **Potential profit** = profit per item × estimated 1h qty
+- **Est. 1h qty** = smallest of: cash stack ÷ buy price, GE 4-hour buy limit, and the thinner of last-hour buy-side vs sell-side volume
 
 Thin volume + a fat margin often means the offers will not fill.

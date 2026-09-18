@@ -58,6 +58,8 @@ def rank_flips(
         "profit",
         "roi",
         "volume_1h",
+        "high_vol_1h",
+        "low_vol_1h",
         "volume_5m",
         "limit",
         "max_qty",
