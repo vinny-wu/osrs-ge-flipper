@@ -1,0 +1,18 @@
+---
+description: Use feature branches and PRs; Vinny approves merges to main
+alwaysApply: true
+---
+
+# Git: branches, PRs, Vinny approves
+
+Do **not** commit or push directly to `main` (or `master`).
+
+When the user asks to save or ship work:
+
+1. Create or switch to a short-lived feature branch (`feat/…`, `fix/…`, `ui/…`).
+2. Commit on that branch only.
+3. Push the branch (`git push -u origin HEAD`).
+4. Open a pull request into `main` with `gh pr create` and return the PR URL.
+5. Stop. Vinny reviews and merges (or requests changes). Do not merge, do not approve as the bot, and do not push to `main` unless Vinny explicitly says to.
+
+The first-commit bootstrap to `main` already happened. Treat that as the exception, not the process.
