@@ -51,7 +51,7 @@ def main() -> None:
             "Cash stack (gp)",
             min_value=1_000,
             max_value=2_147_483_647,
-            value=5_000_000,
+            value=10_000_000,
             step=100_000,
         )
         min_profit = st.number_input("Min profit per item (gp)", 0, 10_000_000, 1_000, 500)
@@ -99,6 +99,8 @@ def main() -> None:
     display = table[
         [
             "name",
+            "potential_profit",
+            "flip_qty",
             "buy_price",
             "sell_price",
             "tax",
@@ -108,14 +110,14 @@ def main() -> None:
             "low_vol_1h",
             "high_vol_1h",
             "limit",
-            "flip_qty",
-            "potential_profit",
             "stale_min",
             "members",
         ]
     ].rename(
         columns={
             "name": "Item",
+            "potential_profit": "Est. 1h profit",
+            "flip_qty": "Est. 1h qty",
             "buy_price": "Buy (low)",
             "sell_price": "Sell (high)",
             "tax": "Tax",
@@ -125,8 +127,6 @@ def main() -> None:
             "low_vol_1h": "Vol buy 1h",
             "high_vol_1h": "Vol sell 1h",
             "limit": "GE limit (4h)",
-            "flip_qty": "Est. 1h qty",
-            "potential_profit": "Est. 1h profit",
             "stale_min": "Stale (min)",
             "members": "Members",
         }
@@ -151,21 +151,27 @@ def main() -> None:
 
     left, right = st.columns([2, 1])
     with left:
+        timestep_labels = {
+            "5m": "Every 5 min",
+            "1h": "Hourly avg",
+            "6h": "Every 6 hours",
+            "24h": "Daily avg",
+        }
         timestep = st.radio(
-            "Each chart point averages",
-            ["5m", "1h", "6h", "24h"],
+            "Each point is",
+            list(timestep_labels),
             index=3,
+            format_func=lambda key: timestep_labels[key],
             horizontal=True,
             help=(
-                "This is the size of each dot, not the length of the x-axis. "
-                "24h = one daily average (the axis is still many months). "
-                "5m = one point every five minutes (much shorter recent window)."
+                "How much time one dot summarizes — the gap between x-axis values. "
+                "Daily avg = one average per day (chart covers about a year). "
+                "Every 5 min = one average every five minutes (short recent window)."
             ),
         )
         st.caption(
-            "X-axis is always time. **24h** means each point is a full day "
-            "(about a year of days). **5m** means each point is five minutes "
-            "(a short recent window)."
+            "Not the length of the x-axis: **Daily avg** spaces points one day apart; "
+            "**Every 5 min** spaces them five minutes apart."
         )
         history = load_history(int(row["item_id"]), timestep)
         if history.empty:
@@ -217,7 +223,28 @@ def main() -> None:
         )
 
     st.subheader("Flip candidates")
-    st.dataframe(display, use_container_width=True, hide_index=True, height=420)
+    profit_col = "Est. 1h profit"
+    styled = display.style.set_properties(
+        subset=[profit_col],
+        **{
+            "color": "#e1c16e",
+            "font-weight": "700",
+            "background-color": "#3a3324",
+        },
+    )
+    st.dataframe(
+        styled,
+        use_container_width=True,
+        hide_index=True,
+        height=420,
+        column_config={
+            profit_col: st.column_config.TextColumn(
+                profit_col,
+                help="Ranked by this: profit after tax × estimated round trips this hour.",
+                width="medium",
+            ),
+        },
+    )
 
 
 if __name__ == "__main__":
