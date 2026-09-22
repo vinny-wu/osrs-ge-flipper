@@ -59,7 +59,14 @@ def main() -> None:
         max_stale = st.slider("Max stale quotes (minutes)", 5, 180, 45)
         world = st.selectbox("Worlds", ["All", "Members", "F2P"])
         members_only = {"All": None, "Members": True, "F2P": False}[world]
-        search = st.text_input("Search item name")
+        search = st.text_input(
+            "Look up item (for listing)",
+            help=(
+                "Type a name to see live high/low even if it is not a flip candidate. "
+                "Use this after a buy fills: list at Sell (high). "
+                "Leave empty to rank flips with the filters above."
+            ),
+        )
         if st.button("Refresh prices"):
             load_catalog.clear()
             st.rerun()
@@ -81,18 +88,30 @@ def main() -> None:
         search=search,
     )
 
+    looking_up = bool(search.strip())
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Items tracked", f"{len(data):,}")
-    c2.metric("Flip candidates", f"{len(flips):,}")
+    c2.metric("Name matches" if looking_up else "Flip candidates", f"{len(flips):,}")
     best = flips.iloc[0] if not flips.empty else None
     c3.metric("Top item", best["name"] if best is not None else "—")
     c4.metric(
-        "Top est. 1h profit",
-        gp(best["potential_profit"]) if best is not None else "—",
+        "List at (high)" if looking_up else "Top est. 1h profit",
+        gp(best["sell_price"] if looking_up else best["potential_profit"])
+        if best is not None
+        else "—",
     )
 
+    if looking_up:
+        st.caption(
+            "Lookup ignores flip filters (profit, volume, stale, cash). "
+            "**Sell (high)** is the live list price after a buy fills."
+        )
+
     if flips.empty:
-        st.warning("No items match those filters. Loosen profit, volume, or cash stack.")
+        if looking_up:
+            st.warning("No item names match that lookup.")
+        else:
+            st.warning("No items match those filters. Loosen profit, volume, or cash stack.")
         st.stop()
 
     table = flips.head(75).copy()
