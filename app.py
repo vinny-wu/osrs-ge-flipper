@@ -5,7 +5,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from flips import rank_flips
-from ge_client import GeClient, catalog
+from ge_client import GeClient, catalog, ge_tax
 
 st.set_page_config(
     page_title="OSRS GE Flipper",
@@ -22,6 +22,53 @@ def load_catalog() -> pd.DataFrame:
 @st.cache_data(ttl=300, show_spinner="Loading price history...")
 def load_history(item_id: int, timestep: str) -> pd.DataFrame:
     return GeClient().timeseries(item_id, timestep=timestep)
+
+
+def chart_stats(series: pd.Series) -> dict[str, float | int | pd.Series]:
+    """IQR fences on a timeseries of averages (not the latest snapshot)."""
+    values = pd.to_numeric(series, errors="coerce")
+    clean = values.dropna()
+    empty_mask = values.isna() & False
+    if len(clean) < 8:
+        return {
+            "median": float(clean.median()) if len(clean) else float("nan"),
+            "min": float(clean.min()) if len(clean) else float("nan"),
+            "max": float(clean.max()) if len(clean) else float("nan"),
+            "low_fence": float("nan"),
+            "high_fence": float("nan"),
+            "outliers": empty_mask,
+            "n_outliers": 0,
+        }
+    q1 = float(clean.quantile(0.25))
+    q3 = float(clean.quantile(0.75))
+    iqr = q3 - q1
+    low_fence = q1 - 1.5 * iqr if iqr > 0 else q1
+    high_fence = q3 + 1.5 * iqr if iqr > 0 else q3
+    outliers = (values < low_fence) | (values > high_fence)
+    return {
+        "median": float(clean.median()),
+        "min": float(clean.min()),
+        "max": float(clean.max()),
+        "low_fence": low_fence,
+        "high_fence": high_fence,
+        "outliers": outliers.fillna(False),
+        "n_outliers": int(outliers.fillna(False).sum()),
+    }
+
+
+def typical_quantile(series: pd.Series, q: float) -> int | None:
+    """Percentile of a series after dropping IQR outliers."""
+    values = pd.to_numeric(series, errors="coerce")
+    stats = chart_stats(values)
+    typical = values[~stats["outliers"]].dropna()
+    if typical.empty:
+        typical = values.dropna()
+    if typical.empty:
+        return None
+    n = float(typical.quantile(q))
+    if pd.isna(n):
+        return None
+    return int(round(n))
 
 
 def gp(value: float | int | None) -> str:
@@ -167,6 +214,19 @@ def main() -> None:
     names = table["name"].tolist()
     selected = st.selectbox("Inspect item", names, index=0)
     row = table[table["name"] == selected].iloc[0]
+    item_id = int(row["item_id"])
+
+    buy_wait = int(row["buy_price"])
+    sell_latest = int(row["sell_price"])
+    tax_latest = ge_tax(sell_latest)
+
+    history_6h = load_history(item_id, "6h")
+    buy_afk_6h = None
+    sell_afk_6h = None
+    if not history_6h.empty:
+        # Cheap tail of lows / rich tail of highs — same "wait longer" idea, opposite sides.
+        buy_afk_6h = typical_quantile(history_6h["avgLowPrice"], 0.25)
+        sell_afk_6h = typical_quantile(history_6h["avgHighPrice"], 0.75)
 
     left, right = st.columns([2, 1])
     with left:
@@ -192,7 +252,7 @@ def main() -> None:
             "Not the length of the x-axis: **Daily avg** spaces points one day apart; "
             "**Every 5 min** spaces them five minutes apart."
         )
-        history = load_history(int(row["item_id"]), timestep)
+        history = load_history(item_id, timestep)
         if history.empty:
             st.info("No history for this item.")
         else:
@@ -213,27 +273,144 @@ def main() -> None:
                     line=dict(color="#7ec8e3"),
                 )
             )
+            high_stats = chart_stats(history["avgHighPrice"])
+            low_stats = chart_stats(history["avgLowPrice"])
+            high_out = history.loc[high_stats["outliers"]]
+            low_out = history.loc[low_stats["outliers"]]
+            if not high_out.empty:
+                fig.add_trace(
+                    go.Scatter(
+                        x=high_out["timestamp"],
+                        y=high_out["avgHighPrice"],
+                        name="High outlier",
+                        mode="markers",
+                        marker=dict(color="#e07a5f", size=8, symbol="x"),
+                    )
+                )
+            if not low_out.empty:
+                fig.add_trace(
+                    go.Scatter(
+                        x=low_out["timestamp"],
+                        y=low_out["avgLowPrice"],
+                        name="Low outlier",
+                        mode="markers",
+                        marker=dict(color="#81b29a", size=8, symbol="x"),
+                    )
+                )
+            x0 = history["timestamp"].min()
+            x1 = history["timestamp"].max()
+            offer_lines = [
+                (buy_wait, "Latest low", "#7ec8e3"),
+                (sell_latest, "Latest high", "#e1c16e"),
+            ]
+            if buy_afk_6h is not None:
+                offer_lines.append((buy_afk_6h, "Buy AFK (6h)", "#81b29a"))
+            if sell_afk_6h is not None:
+                offer_lines.append((sell_afk_6h, "Sell AFK (6h)", "#c084fc"))
+            seen_y: set[int] = set()
+            for y, name, color in offer_lines:
+                key = int(round(float(y)))
+                if key in seen_y:
+                    continue
+                seen_y.add(key)
+                fig.add_trace(
+                    go.Scatter(
+                        x=[x0, x1],
+                        y=[y, y],
+                        mode="lines",
+                        name=name,
+                        line=dict(color=color, dash="dot", width=1),
+                        hovertemplate=name + ": %{y:,.0f} gp<extra></extra>",
+                    )
+                )
             fig.update_layout(
                 title=f"{row['name']} price history",
                 xaxis_title="Date",
                 yaxis_title="gp",
                 margin=dict(l=10, r=10, t=40, b=10),
-                legend=dict(orientation="h"),
+                legend=dict(orientation="h", yanchor="bottom", y=-0.28, font=dict(size=11)),
                 template="plotly_dark",
                 paper_bgcolor="#1b1a17",
                 plot_bgcolor="#1b1a17",
             )
             st.plotly_chart(fig, use_container_width=True)
+            st.caption(
+                f"X marks IQR outliers on this series ({timestep_labels[timestep]}). "
+                f"{int(high_stats['n_outliers'])} unusual highs, "
+                f"{int(low_stats['n_outliers'])} unusual lows. "
+                "A spike high may never fill; a crash low may never get a seller. "
+                "Dotted lines are the inspect-table list prices."
+            )
 
     with right:
         st.subheader(row["name"])
-        st.metric("Buy at (low)", gp(row["buy_price"]))
-        st.metric("Sell at (high)", gp(row["sell_price"]))
-        st.metric("Profit after tax", gp(row["profit"]))
-        st.metric("1h volume (total)", f"{int(row['volume_1h']):,}")
-        st.metric("Buy-side vol 1h", f"{int(row['low_vol_1h']):,}")
-        st.metric("Sell-side vol 1h", f"{int(row['high_vol_1h']):,}")
-        st.caption("Buy-side = trades at the low (you getting stock). Sell-side = trades at the high (you dumping). Est. 1h qty uses the smaller of those two, then cash and the 4h buy limit.")
+        offers = [
+            {
+                "Offer": "Latest low",
+                "List": gp(buy_wait),
+                "After tax": "—",
+                "Source": "Wiki /latest low",
+            },
+        ]
+        if buy_afk_6h is not None:
+            offers.append(
+                {
+                    "Offer": "Buy AFK (6h)",
+                    "List": gp(buy_afk_6h),
+                    "After tax": "—",
+                    "Source": "25th pct 6h avg low, outliers dropped",
+                }
+            )
+        offers.append(
+            {
+                "Offer": "Latest high",
+                "List": gp(sell_latest),
+                "After tax": gp(sell_latest - tax_latest),
+                "Source": "Wiki /latest high",
+            }
+        )
+        if sell_afk_6h is not None:
+            offers.append(
+                {
+                    "Offer": "Sell AFK (6h)",
+                    "List": gp(sell_afk_6h),
+                    "After tax": gp(sell_afk_6h - ge_tax(sell_afk_6h)),
+                    "Source": "75th pct 6h avg high, outliers dropped",
+                }
+            )
+        st.dataframe(pd.DataFrame(offers), hide_index=True, use_container_width=True)
+
+        if not history.empty:
+            hs = chart_stats(history["avgHighPrice"])
+            ls = chart_stats(history["avgLowPrice"])
+            if pd.notna(hs["high_fence"]) and sell_latest > hs["high_fence"]:
+                st.warning(
+                    "Latest high is above typical highs on this chart — listing there may never fill."
+                )
+            if pd.notna(ls["low_fence"]) and buy_wait < ls["low_fence"]:
+                st.warning(
+                    "Latest low is below typical lows on this chart — waiting on a buy may take forever."
+                )
+
+        vol = pd.DataFrame(
+            [
+                {
+                    "Vol buy 1h": f"{int(row['low_vol_1h']):,}",
+                    "Vol sell 1h": f"{int(row['high_vol_1h']):,}",
+                    "Vol 1h": f"{int(row['volume_1h']):,}",
+                }
+            ]
+        )
+        st.dataframe(vol, hide_index=True, use_container_width=True)
+        st.caption(
+            "Dotted lines are these list prices. "
+            "Buy AFK / Sell AFK are the ambitious tails of 6h history (25th of lows, 75th of highs), "
+            "not the current book. "
+            "Worth waiting on a buy if Buy AFK is **below** Latest low; "
+            "worth waiting on a sell if Sell AFK is **above** Latest high. "
+            "If the AFK line is on the other side, the latest print already beats that tail. "
+            "None of these prices guarantee a fill."
+        )
         wiki = row["name"].replace(" ", "_")
         st.link_button("Open on OSRS Wiki", f"https://oldschool.runescape.wiki/w/{wiki}")
         st.caption(
