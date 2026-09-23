@@ -69,6 +69,8 @@ def rank_flips(
         "flip_qty",
         "potential_profit",
         "stale_min",
+        "avg_high_1h",
+        "avg_low_1h",
         "examine",
     ]
     if lookup:
